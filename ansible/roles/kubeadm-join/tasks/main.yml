@@ -1,0 +1,5 @@
+- name: Join workers
+  command: "{{ hostvars[groups['control'][0]].join_command }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+

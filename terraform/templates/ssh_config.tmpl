@@ -1,0 +1,12 @@
+Host *
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+    IdentityFile ${identity_file}
+
+%{ for name, ip in hosts ~}
+Host ${name}
+    HostName ${ip}
+    User ${user}
+%{ endfor ~}
+

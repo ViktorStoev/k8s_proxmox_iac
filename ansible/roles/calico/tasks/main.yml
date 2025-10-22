@@ -1,0 +1,8 @@
+- name: Apply Calico operator + CRs
+  become_user: "{{ ansible_user }}"
+  shell: |
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.3/manifests/tigera-operator.yaml
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.3/manifests/custom-resources.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+

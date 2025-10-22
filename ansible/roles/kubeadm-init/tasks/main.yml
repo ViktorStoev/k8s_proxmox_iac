@@ -1,0 +1,22 @@
+- name: kubeadm init
+  command: >
+    kubeadm init --pod-network-cidr={{ pod_cidr }}
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Setup kubeconfig for ubuntu
+  become_user: "{{ ansible_user }}"
+  shell: |
+    mkdir -p $HOME/.kube
+    sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+- name: Save join command
+  shell: kubeadm token create --print-join-command
+  register: join_cmd
+  changed_when: false
+
+- name: Set fact join_command
+  set_fact:
+    join_command: "{{ join_cmd.stdout }}"
+

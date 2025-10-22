@@ -1,0 +1,12 @@
+[control]
+${control_name} ansible_host=${control_ip}
+ 
+[workers]
+%{ for name, ip in worker_map ~}
+${name} ansible_host=${ip}
+%{ endfor ~}
+
+[all:vars]
+ansible_user=${ansible_user}
+ansible_ssh_common_args='-F ./inventory/ssh_config'
+

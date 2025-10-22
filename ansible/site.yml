@@ -1,0 +1,21 @@
+- hosts: all
+  become: yes
+  roles:
+    - common
+    - containerd
+    - kube-packages
+
+- hosts: control
+  become: yes
+  roles:
+    - kubeadm-init
+    - calico
+    - metallb
+    - metrics-server
+    - ingress-nginx
+
+- hosts: workers
+  become: yes
+  roles:
+    - kubeadm-join
+

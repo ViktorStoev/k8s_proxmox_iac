@@ -1,0 +1,12 @@
+.terraform/
+terraform/.terraform/
+terraform.tfstate*
+terraform/*.tfvars
+
+# Ansible runtime
+ansible/inventory/*
+!ansible/inventory/.gitkeep
+
+# Local
+*.log
+*.retry

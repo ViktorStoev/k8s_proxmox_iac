@@ -1,0 +1,29 @@
+- name: Install MetalLB
+  become_user: "{{ ansible_user }}"
+  shell: |
+    kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.2/config/manifests/metallb-native.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+
+- name: Apply IPAddressPool + L2Adv
+  become_user: "{{ ansible_user }}"
+  copy:
+    dest: /tmp/metallb.yaml
+    content: |
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata: {name: lb-pool, namespace: metallb-system}
+      spec:
+        addresses: [ "{{ metallb_pool }}" ]
+      ---
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata: {name: l2adv, namespace: metallb-system}
+      spec:
+        ipAddressPools: ["lb-pool"]
+  register: mlb
+
+- name: Apply manifest
+  become_user: "{{ ansible_user }}"
+  shell: kubectl apply -f /tmp/metallb.yaml
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+
