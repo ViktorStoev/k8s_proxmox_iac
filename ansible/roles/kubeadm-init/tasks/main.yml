@@ -1,5 +1,4 @@
 ---
-# kubeadm init (без CNI)
 - name: Initialize control plane if not already
   command: >
     kubeadm init --pod-network-cidr={{ pod_cidr }}
@@ -25,7 +24,6 @@
     group: "{{ ansible_user }}"
     mode: "0600"
 
-# сохранить команду join (в fact), чтобы отдали её workers
 - name: Get join command
   shell: kubeadm token create --print-join-command
   register: join_cmd

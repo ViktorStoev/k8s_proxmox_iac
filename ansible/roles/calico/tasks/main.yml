@@ -1,5 +1,4 @@
 ---
-# Применяем Tigera Operator
 - name: Apply Tigera operator (Calico)
   become: yes
   environment:
@@ -7,7 +6,6 @@
   command: >
     kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
 
-# Ждём, пока оператор поднимется
 - name: Wait for tigera-operator to be available
   become: yes
   environment:
@@ -19,7 +17,6 @@
   delay: 10
   until: tigera_rollout.rc == 0
 
-# Ждём появления CRD (operator.tigera.io/v1)
 - name: Wait for Calico CRDs to exist
   become: yes
   environment:
@@ -31,7 +28,6 @@
   delay: 5
   until: calico_crd_check.rc == 0
 
-# Применяем дефолтные CR (включая IPPool). По умолчанию там 192.168.0.0/16 — совпадает с pod_cidr.
 - name: Apply Calico custom resources (default IPPool)
   become: yes
   environment:
@@ -48,7 +44,6 @@
   delay: 5
   until: ns_check.rc == 0
 
-# Ждём, пока calico-node DaemonSet прогрузится на всех нодах
 - name: Wait for calico-node DaemonSet to be ready
   become: yes
   environment:
@@ -60,7 +55,6 @@
   delay: 10
   until: calico_node_rollout.rc == 0
 
-# Ждём CoreDNS (обычно он станет Ready после CNI)
 - name: Wait for CoreDNS to be ready
   become: yes
   environment:

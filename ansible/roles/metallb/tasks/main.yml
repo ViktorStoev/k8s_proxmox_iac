@@ -11,7 +11,6 @@
   delay: 10
   until: (ready_workers.stdout | int) >= 1
 
-# Установим MetalLB "native" manifest
 - name: Apply MetalLB native manifest
   become: yes
   environment:
@@ -29,7 +28,6 @@
   args:
     executable: /bin/bash
 
-# Дождёмся контроллера и спикера
 - name: Wait for metallb-controller
   become: yes
   environment:
@@ -52,7 +50,6 @@
   delay: 10
   until: speaker_rollout.rc == 0
 
-# Kubernetes iptables kube-proxy: strict ARP = true (нужно для L2 mode)
 - name: Enable strictARP in kube-proxy (required for MetalLB L2)
   become: yes
   environment:
@@ -63,7 +60,6 @@
     | kubectl apply -f -
   changed_when: false
 
-# Применим адресный пул и L2-объявление
 - name: Apply IPAddressPool
   become: yes
   environment:
