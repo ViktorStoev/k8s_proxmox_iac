@@ -16,6 +16,12 @@
     regexp: 'SystemdCgroup = false'
     replace: 'SystemdCgroup = true'
 
+- name: Install CNI plugins package (Ubuntu)
+  apt:
+    name: containernetworking-plugins
+    state: present
+    update_cache: yes
+
 - name: Enable & restart containerd
   systemd:
     name: containerd

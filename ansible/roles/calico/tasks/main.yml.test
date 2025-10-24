@@ -12,24 +12,12 @@
   become: yes
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: |
-    kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=300s
+  command: >
+    kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=180s
   register: tigera_rollout
-  retries: 10
+  retries: 5
   delay: 10
   until: tigera_rollout.rc == 0
-
-# Ждём появления CRD (operator.tigera.io/v1)
-- name: Wait for Calico CRDs to exist
-  become: yes
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: |
-    kubectl get crd installations.operator.tigera.io
-  register: calico_crd_check
-  retries: 30
-  delay: 5
-  until: calico_crd_check.rc == 0
 
 # Применяем дефолтные CR (включая IPPool). По умолчанию там 192.168.0.0/16 — совпадает с pod_cidr.
 - name: Apply Calico custom resources (default IPPool)
@@ -39,24 +27,15 @@
   command: >
     kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
 
-- name: Wait for calico-system namespace
-  become: yes
-  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
-  shell: kubectl get ns calico-system
-  register: ns_check
-  retries: 30
-  delay: 5
-  until: ns_check.rc == 0
-
 # Ждём, пока calico-node DaemonSet прогрузится на всех нодах
 - name: Wait for calico-node DaemonSet to be ready
   become: yes
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: |
-    kubectl -n calico-system rollout status ds/calico-node --timeout=600s
+  command: >
+    kubectl -n calico-system rollout status ds/calico-node --timeout=300s
   register: calico_node_rollout
-  retries: 10
+  retries: 6
   delay: 10
   until: calico_node_rollout.rc == 0
 
@@ -65,8 +44,10 @@
   become: yes
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: kubectl -n kube-system rollout status deploy/coredns --timeout=600s
+  command: >
+    kubectl -n kube-system rollout status deploy/coredns --timeout=300s
   register: coredns_rollout
-  retries: 10
+  retries: 6
   delay: 10
   until: coredns_rollout.rc == 0
+

@@ -1,0 +1,15 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: {{ metallb_pool_name }}
+  namespace: metallb-system
+spec:
+  addresses:
+{% if metallb_ip_ranges is defined %}
+{%   for r in metallb_ip_ranges %}
+    - {{ r }}
+{%   endfor %}
+{% else %}
+    - {{ metallb_pool }}
+{% endif %}
+

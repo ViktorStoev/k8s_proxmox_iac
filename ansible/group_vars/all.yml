@@ -2,4 +2,9 @@ k8s_version: "1.34"
 pod_cidr: "192.168.0.0/16"
 service_cidr: "10.96.0.0/12"
 
+calico_version: "v3.30.3"
+
+metallb_version: "v0.14.5"
 metallb_pool: "192.168.1.240-192.168.1.250"
+metallb_pool_name: "metallb-pool"
+metallb_l2adv_name: "metallb-l2"

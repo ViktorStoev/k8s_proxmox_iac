@@ -10,12 +10,14 @@
   roles:
     - kubeadm-init
     - calico
-    - metallb
-    - metrics-server
-    - ingress-nginx
 
 - hosts: workers
   become: yes
   roles:
     - kubeadm-join
 
+- hosts: control
+  become: yes
+  roles:
+    - metallb
+    - ingress-nginx

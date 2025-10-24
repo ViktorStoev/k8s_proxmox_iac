@@ -1,22 +1,37 @@
-- name: kubeadm init
+---
+# kubeadm init (без CNI)
+- name: Initialize control plane if not already
   command: >
     kubeadm init --pod-network-cidr={{ pod_cidr }}
   args:
     creates: /etc/kubernetes/admin.conf
 
-- name: Setup kubeconfig for ubuntu
-  become_user: "{{ ansible_user }}"
-  shell: |
-    mkdir -p $HOME/.kube
-    sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+- name: Ensure ~/.kube directory exists for {{ ansible_user }}
+  become: yes
+  file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0700"
 
-- name: Save join command
+- name: Install kubeconfig for {{ ansible_user }} (copy admin.conf)
+  become: yes
+  copy:
+    remote_src: true
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ ansible_user }}/.kube/config"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+# сохранить команду join (в fact), чтобы отдали её workers
+- name: Get join command
   shell: kubeadm token create --print-join-command
   register: join_cmd
   changed_when: false
 
-- name: Set fact join_command
+- name: Set join_command fact for other hosts
   set_fact:
     join_command: "{{ join_cmd.stdout }}"
 

@@ -1,29 +1,89 @@
-- name: Install MetalLB
-  become_user: "{{ ansible_user }}"
+---
+- name: Wait for at least 1 Ready worker node
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
   shell: |
-    kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.2/config/manifests/metallb-native.yaml
-  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+    kubectl get nodes --no-headers \
+    | grep -v 'control-plane' \
+    | grep -c ' Ready ' || true
+  register: ready_workers
+  retries: 30
+  delay: 10
+  until: (ready_workers.stdout | int) >= 1
 
-- name: Apply IPAddressPool + L2Adv
-  become_user: "{{ ansible_user }}"
-  copy:
-    dest: /tmp/metallb.yaml
-    content: |
-      apiVersion: metallb.io/v1beta1
-      kind: IPAddressPool
-      metadata: {name: lb-pool, namespace: metallb-system}
-      spec:
-        addresses: [ "{{ metallb_pool }}" ]
-      ---
-      apiVersion: metallb.io/v1beta1
-      kind: L2Advertisement
-      metadata: {name: l2adv, namespace: metallb-system}
-      spec:
-        ipAddressPools: ["lb-pool"]
-  register: mlb
+# Установим MetalLB "native" manifest
+- name: Apply MetalLB native manifest
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  command: >
+    kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml
 
-- name: Apply manifest
-  become_user: "{{ ansible_user }}"
-  shell: kubectl apply -f /tmp/metallb.yaml
+- name: Ensure MetalLB memberlist secret exists
+  become: yes
   environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl -n metallb-system get secret memberlist >/dev/null 2>&1 || \
+    kubectl -n metallb-system create secret generic memberlist \
+      --from-literal=secretkey="$(openssl rand -base64 128)"
+  args:
+    executable: /bin/bash
+
+# Дождёмся контроллера и спикера
+- name: Wait for metallb-controller
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  command: >
+    kubectl -n metallb-system rollout status deploy/controller --timeout=600s
+  register: controller_rollout
+  retries: 10
+  delay: 10
+  until: controller_rollout.rc == 0
+
+- name: Wait for metallb-speaker DaemonSet
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  command: >
+    kubectl -n metallb-system rollout status ds/speaker --timeout=600s
+  register: speaker_rollout
+  retries: 10
+  delay: 10
+  until: speaker_rollout.rc == 0
+
+# Kubernetes iptables kube-proxy: strict ARP = true (нужно для L2 mode)
+- name: Enable strictARP in kube-proxy (required for MetalLB L2)
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  shell: |
+    kubectl -n kube-system get configmap kube-proxy -o yaml \
+    | sed 's/strictARP: false/strictARP: true/' \
+    | kubectl apply -f -
+  changed_when: false
+
+# Применим адресный пул и L2-объявление
+- name: Apply IPAddressPool
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  template:
+    src: ipaddresspool.yaml.j2
+    dest: /tmp/metallb-ipaddresspool.yaml
+
+- name: Apply L2Advertisement
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  template:
+    src: l2advertisement.yaml.j2
+    dest: /tmp/metallb-l2advertisement.yaml
+
+- name: kubectl apply pool+adv
+  become: yes
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  command: >
+    kubectl apply -f /tmp/metallb-ipaddresspool.yaml -f /tmp/metallb-l2advertisement.yaml
 
