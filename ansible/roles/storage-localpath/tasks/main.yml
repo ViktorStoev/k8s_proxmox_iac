@@ -1,0 +1,154 @@
+---
+# roles/storage-localpath/tasks/main.yml
+
+# Применяем local-path-provisioner от Rancher
+- name: Apply local-path-provisioner manifest
+  tags: [storage]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_version }}/deploy/local-path-storage.yaml
+
+# Ждём namespace и DaemonSet
+- name: Wait for local-path-storage namespace
+  tags: [storage]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: kubectl get ns local-path-storage
+  register: lps_ns
+  retries: 30
+  delay: 5
+  until: lps_ns.rc == 0
+
+- name: Wait for local-path-provisioner Deployment available
+  tags: [storage]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl -n local-path-storage
+    rollout status deploy/local-path-provisioner --timeout=300s
+  register: lps_deploy_rollout
+  retries: 6
+  delay: 10
+  until: lps_deploy_rollout.rc == 0
+
+- name: Wait for StorageClass local-path to appear
+  tags: [storage]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: kubectl get sc local-path
+  register: sc_check
+  retries: 30
+  delay: 3
+  until: sc_check.rc == 0
+
+# Делаем local-path дефолтным StorageClass (dev/test)
+- name: Annotate local-path StorageClass as default (idempotent)
+  tags: [storage]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl annotate sc local-path
+    storageclass.kubernetes.io/is-default-class="true" --overwrite
+  changed_when: false
+
+#######################################################################
+# SMOKE-TEST (можно запускать отдельно тегом storage_smoke)
+#######################################################################
+- name: Create smoke-test PVC manifest
+  tags: [storage_smoke]
+  become: yes
+  copy:
+    dest: /tmp/lps-smoke-pvc.yaml
+    mode: "0644"
+    content: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: lps-smoke-pvc
+        namespace: default
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi
+
+- name: Create smoke-test Pod manifest
+  tags: [storage_smoke]
+  become: yes
+  copy:
+    dest: /tmp/lps-smoke-pod.yaml
+    mode: "0644"
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: lps-smoke-pod
+        namespace: default
+      spec:
+        containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh","-c","echo OK > /data/ok.txt && sleep 3600"]
+          volumeMounts:
+          - name: data
+            mountPath: /data
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lps-smoke-pvc
+        restartPolicy: Never
+
+- name: Apply smoke-test PVC/Pod
+  tags: [storage_smoke]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl apply -f /tmp/lps-smoke-pvc.yaml -f /tmp/lps-smoke-pod.yaml
+
+- name: Wait for PVC Bound
+  tags: [storage_smoke]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl get pvc lps-smoke-pvc -o jsonpath='{.status.phase}'
+  register: pvc_phase
+  retries: 30
+  delay: 4
+  until: pvc_phase.stdout == "Bound"
+
+- name: Wait for Pod Running
+  tags: [storage_smoke]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl get pod lps-smoke-pod -o jsonpath='{.status.phase}'
+  register: pod_phase
+  retries: 45
+  delay: 4
+  until: pod_phase.stdout == "Running"
+
+- name: Read file from mounted volume (sanity check)
+  tags: [storage_smoke]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl exec lps-smoke-pod -- cat /data/ok.txt
+  register: smoke_file
+  failed_when: smoke_file.stdout.strip() != "OK"
+
+- name: ✅ Storage smoke test PASS
+  tags: [storage_smoke]
+  debug:
+    msg: "Local Path Provisioner works: PVC Bound, Pod Running, file content='{{ smoke_file.stdout.strip() }}'"
+
+# Опционально — убираем за собой (если хочешь оставить артефакты — закомментируй)
+- name: Cleanup smoke-test resources
+  tags: [storage_smoke]
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl delete -f /tmp/lps-smoke-pod.yaml -f /tmp/lps-smoke-pvc.yaml --ignore-not-found=true
+

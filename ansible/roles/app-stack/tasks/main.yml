@@ -1,0 +1,195 @@
+---
+# roles/app-stack/tasks/main.yml
+
+- name: Ensure app namespace exists
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: kubectl create ns app
+  register: ns_created
+  failed_when: false
+  changed_when: "'created' in ns_created.stdout"
+
+# ---------- PostgreSQL via Helm (Bitnami) ----------
+- name: Ensure bitnami helm repo present
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    helm repo list | grep -q '^bitnami' || helm repo add bitnami https://charts.bitnami.com/bitnami
+  args: { warn: false }
+  changed_when: false
+
+- name: Helm repo update
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: helm repo update
+  changed_when: false
+
+- name: Render pg values to /tmp
+  become: yes
+  copy:
+    dest: /tmp/appstack-pg-values.yaml
+    mode: "0644"
+    content: |
+      primary:
+        persistence:
+          enabled: true
+          storageClass: local-path
+          size: {{ pg_storage_size }}
+      architecture: standalone
+      auth:
+        postgresPassword: {{ pg_password | to_json }}
+
+# Если указана pg_chart_version — добавим опцию --version, иначе без неё
+- name: Install/upgrade PostgreSQL (Bitnami)
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: >
+    helm upgrade --install pg bitnami/postgresql
+    -n app -f /tmp/appstack-pg-values.yaml
+    {% if pg_chart_version is defined and pg_chart_version|length > 0 -%}
+    --version {{ pg_chart_version }}
+    {%- endif %}
+  args: { warn: false }
+
+- name: Wait for PostgreSQL pod Ready
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl -n app get pods -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].status.containerStatuses[0].ready}'
+  register: pg_ready
+  retries: 60
+  delay: 5
+  until: pg_ready.stdout == "true"
+
+- name: Wait for PostgreSQL PVC Bound
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl -n app get pvc -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].status.phase}'
+  register: pg_pvc
+  retries: 60
+  delay: 5
+  until: pg_pvc.stdout == "Bound"
+
+# ---------- NGINX (минимум) ----------
+- name: Render nginx Deployment
+  become: yes
+  copy:
+    dest: /tmp/appstack-nginx-deploy.yaml
+    mode: "0644"
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+        namespace: app
+        labels: { app: web }
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: { app: web }
+        template:
+          metadata:
+            labels: { app: web }
+          spec:
+            containers:
+            - name: nginx
+              image: nginx:1.27
+              ports:
+              - containerPort: 80
+              readinessProbe:
+                httpGet: { path: "/", port: 80 }
+                initialDelaySeconds: 3
+                periodSeconds: 5
+              livenessProbe:
+                httpGet: { path: "/", port: 80 }
+                initialDelaySeconds: 10
+                periodSeconds: 10
+
+- name: Render nginx Service
+  become: yes
+  copy:
+    dest: /tmp/appstack-nginx-svc.yaml
+    mode: "0644"
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: web
+        namespace: app
+        labels: { app: web }
+      spec:
+        type: ClusterIP
+        selector: { app: web }
+        ports:
+        - name: http
+          port: 80
+          targetPort: 80
+
+- name: Render nginx Ingress
+  become: yes
+  copy:
+    dest: /tmp/appstack-nginx-ing.yaml
+    mode: "0644"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: web
+        namespace: app
+        annotations:
+          kubernetes.io/ingress.class: nginx
+      spec:
+        rules:
+        - host: {{ app_host }}
+          http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: web
+                  port:
+                    number: 80
+
+- name: Apply nginx manifests
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: >
+    kubectl apply -f /tmp/appstack-nginx-deploy.yaml
+                 -f /tmp/appstack-nginx-svc.yaml
+                 -f /tmp/appstack-nginx-ing.yaml
+
+- name: Wait for nginx pod Ready
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl -n app get pods -l app=web -o jsonpath='{.items[0].status.containerStatuses[0].ready}'
+  register: web_ready
+  retries: 60
+  delay: 5
+  until: web_ready.stdout == "true"
+
+# ---------- Outputs / Smoke ----------
+- name: Show PG service
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  command: kubectl -n app get svc -l app.kubernetes.io/name=postgresql -o wide
+
+- name: Show nginx ingress/service
+  become: yes
+  environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+  shell: |
+    kubectl -n app get ingress web -o wide
+    echo "---"
+    kubectl -n app get svc web -o wide
+  register: web_info
+  changed_when: false
+
+- name: Print how to test
+  debug:
+    msg:
+      - "Add to /etc/hosts on your workstation: <INGRESS_LB_IP> {{ app_host }}"
+      - "Then: curl -H 'Host: {{ app_host }}' http://<INGRESS_LB_IP>/"
+      - "Check: kubectl -n app get pods,svc,ingress"
+

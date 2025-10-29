@@ -1,0 +1,166 @@
+---
+# Все команды выполняем на control-node с системным KUBECONFIG
+- block:
+    - name: Ensure monitoring namespace exists
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: kubectl create namespace monitoring
+      args: { creates: /var/run/monitoring-ns.created }
+      register: _ns
+      changed_when: "'created' in _ns.stdout"
+      failed_when: false
+
+    - name: Mark monitoring namespace created
+      file: { path: /var/run/monitoring-ns.created, state: touch }
+
+  tags: [monitoring]
+
+# ---------------------------
+# 1) metrics-server (kubectl)
+# ---------------------------
+- block:
+    - name: Apply metrics-server upstream manifest
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl apply -f
+        https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+    # Добавляем аргумент --kubelet-insecure-tls если его нет (домашний кластер, self-signed)
+    - name: Check metrics-server args
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      shell: >
+        kubectl -n kube-system get deploy metrics-server -o jsonpath='{.spec.template.spec.containers[0].args}'
+        || true
+      register: ms_args
+      changed_when: false
+
+    - name: Patch metrics-server to add --kubelet-insecure-tls
+      when: ms_args.stdout is not search("--kubelet-insecure-tls")
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl -n kube-system patch deploy metrics-server
+        --type=json
+        -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+    - name: Wait for metrics-server rollout
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl -n kube-system rollout status deploy/metrics-server --timeout=300s
+      register: ms_rollout
+      retries: 10
+      delay: 10
+      until: ms_rollout.rc == 0
+  tags: [monitoring]
+
+# ---------------------------
+# 2) Установка Helm (если нет)
+# ---------------------------
+- block:
+    - name: Set Helm vars
+      set_fact:
+        helm_ver: "v3.14.4"
+        helm_os: "linux"
+        helm_arch: "amd64"
+
+    - name: Check helm binary
+      command: helm version --short
+      register: helm_check
+      changed_when: false
+      failed_when: false
+
+    - name: Download helm tarball
+      when: helm_check.rc != 0
+      get_url:
+        url: "https://get.helm.sh/helm-{{ helm_ver }}-{{ helm_os }}-{{ helm_arch }}.tar.gz"
+        dest: "/tmp/helm-{{ helm_ver }}.tar.gz"
+        mode: "0644"
+
+    - name: Unpack helm
+      when: helm_check.rc != 0
+      unarchive:
+        src: "/tmp/helm-{{ helm_ver }}.tar.gz"
+        dest: /tmp
+        remote_src: yes
+
+    - name: Install helm to /usr/local/bin
+      when: helm_check.rc != 0
+      ansible.builtin.copy:
+        src: "/tmp/{{ helm_os }}-{{ helm_arch }}/helm"
+        dest: "/usr/local/bin/helm"
+        mode: "0755"
+        remote_src: true
+  tags: [monitoring]
+
+
+# -----------------------------------------
+# 3) kube-prometheus-stack через Helm chart
+# -----------------------------------------
+- block:
+    - name: Add prometheus-community repo
+      command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      register: repo_add
+      changed_when: "'has been added' in repo_add.stdout or 'already exists' in repo_add.stdout"
+      failed_when: false
+
+    - name: Helm repo update
+      command: helm repo update
+
+    - name: Render kube-prometheus-stack values
+      template:
+        src: values-kps.yaml.j2
+        dest: /tmp/values-kps.yaml
+        mode: "0644"
+
+    - name: Install/Upgrade kube-prometheus-stack
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        helm upgrade --install kube-prometheus-stack
+        prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --values /tmp/values-kps.yaml
+        --wait --timeout 15m
+
+    # Подождать готовность основных компонентов
+    - name: Wait for Prometheus
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl -n monitoring rollout status statefulset/prometheus-kube-prometheus-stack-prometheus --timeout=600s
+      register: prom_rollout
+      retries: 10
+      delay: 10
+      until: prom_rollout.rc == 0
+
+    - name: Wait for Alertmanager
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl -n monitoring rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager --timeout=600s
+      register: am_rollout
+      retries: 10
+      delay: 10
+      until: am_rollout.rc == 0
+
+    - name: Wait for Grafana
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: >
+        kubectl -n monitoring rollout status deploy/kube-prometheus-stack-grafana --timeout=600s
+      register: gf_rollout
+      retries: 10
+      delay: 10
+      until: gf_rollout.rc == 0
+  tags: [monitoring]
+
+# ---------------------------
+# 4) Простая проверка (top)
+# ---------------------------
+- block:
+    - name: Check kubectl top nodes (warm-up)
+      environment: { KUBECONFIG: /etc/kubernetes/admin.conf }
+      command: kubectl top nodes
+      register: top_nodes
+      changed_when: false
+      failed_when: false
+
+    - name: Show top nodes output
+      debug:
+        var: top_nodes.stdout
+  tags: [monitoring]
+

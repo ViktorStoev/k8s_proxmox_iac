@@ -1,23 +1,65 @@
-- hosts: all
+---
+- name: Base OS + container runtime + k8s packages
+  hosts: all
   become: yes
+  tags: [cluster]
   roles:
-    - common
-    - containerd
-    - kube-packages
+    - role: common
+    - role: containerd
+    - role: kube-packages
 
-- hosts: control
+- name: Initialize control plane
+  hosts: control
   become: yes
+  tags: [cluster]
   roles:
-    - kubeadm-init
-    - calico
+    - role: kubeadm-init
 
-- hosts: workers
+- name: Join worker nodes
+  hosts: workers
   become: yes
+  tags: [cluster]
   roles:
-    - kubeadm-join
+    - role: kubeadm-join
 
-- hosts: control
+- name: Install Calico CNI
+  hosts: control
   become: yes
+  tags: [calico]
   roles:
-    - metallb
-    - ingress-nginx
+    - role: calico
+
+- name: Install MetalLB
+  hosts: control
+  become: yes
+  tags: [metallb]
+  roles:
+    - role: metallb
+
+- name: Install ingress-nginx
+  hosts: control
+  become: yes
+  tags: [ingress]
+  roles:
+    - role: ingress-nginx
+
+- name: Install monitoring stack
+  hosts: control
+  become: yes
+  tags: [monitoring]
+  roles:
+    - role: monitoring
+
+- name: Install local-path StorageClass (default)
+  hosts: control
+  become: yes
+  tags: [storage]
+  roles:
+    - role: storage-localpath
+
+- name: Deploy app stack (PostgreSQL + web)
+  hosts: control
+  become: yes
+  tags: [appstack]
+  roles:
+    - role: app-stack
